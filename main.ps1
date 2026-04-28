@@ -9,9 +9,9 @@ $ErrorActionPreference = "Stop"
 
 # ============================================================
 # AI_STREAM main.ps1
-# - C:\ai-script 固定をやめ、スクリプト位置基準で動くようにした版
-# - 既存 mod/*.psm1 を読み込み、既存関数を利用する
-# - 関数名や引数の違いに少し耐えられるよう、候補名から自動呼び出しする
+# - 固定パスを使わず、main.ps1 の配置場所を基準に動作
+# - 既存 mod/*.psm1 を読み込み、既存関数を利用
+# - mod02 の Ensure-AccessToken は [ref] 必須のため、Get-AuthHeaders 経由で呼び出す
 # ============================================================
 
 function Write-Info {
@@ -153,6 +153,14 @@ function Invoke-AiStreamFunction {
 $Root = Resolve-AiStreamRoot -RootPath $RootPath
 Write-Info "Root: $Root"
 
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $Root "config\mykey.json"
+}
+
+# 既存モジュール内の固定パスフォールバックを避けるため、先に環境変数へ現在の場所を設定
+$env:AI_SCRIPT_ROOT = $Root
+$env:AI_CONFIG_PATH = $ConfigPath
+
 Import-AiStreamModules -Root $Root
 
 $configResult = Read-AiStreamConfig -Root $Root -ConfigPath $ConfigPath
@@ -174,29 +182,36 @@ Write-Info "MaxReplyLength: $maxReplyLength"
 $lastTokenCheck = [datetime]::MinValue
 $tokenCheckIntervalMinutes = 5
 
+$accessToken = $null
+$headers = $null
 $seenMessageIds = @{}
 
 while ($true) {
     try {
         $now = Get-Date
 
-        if (($now - $lastTokenCheck).TotalMinutes -ge $tokenCheckIntervalMinutes) {
-            $accessToken = Invoke-AiStreamFunction `
-                -Names @("Ensure-AccessToken", "EnsureAccessToken", "Get-EnsuredAccessToken") `
-                -Args @{
-                    ConfigPath = $ConfigFile
-                    Config = $Config
-                    KeyPath = $ConfigFile
-                } `
-                -FallbackPositionArgs @($ConfigFile)
+        if (($now - $lastTokenCheck).TotalMinutes -ge $tokenCheckIntervalMinutes -or [string]::IsNullOrWhiteSpace("$accessToken")) {
+            if (-not (Get-Command Get-AuthHeaders -ErrorAction SilentlyContinue)) {
+                throw "Get-AuthHeaders 関数が見つかりません。mod02.psm1 が正しく読み込まれているか確認してください。"
+            }
+
+            Write-Info "Call function: Get-AuthHeaders"
+            $auth = Get-AuthHeaders
+            $accessToken = $auth.access_token
+            $headers = $auth.headers
+
+            if ([string]::IsNullOrWhiteSpace("$accessToken")) {
+                throw "access_token が取得できませんでした。config/youtube_tokens.json と refresh_token を確認してください。"
+            }
 
             $lastTokenCheck = $now
         }
 
         $liveChatId = Invoke-AiStreamFunction `
-            -Names @("Get-LiveChatId", "Get-ActiveLiveChatId", "Get-YouTubeLiveChatId", "Get-ActiveLiveBroadcastChatId", "Get-LiveBroadcast") `
+            -Names @("Get-LiveChatId", "Get-ActiveLiveChatId", "Get-YouTubeLiveChatId", "Get-ActiveLiveBroadcastChatId", "Resolve-LiveChat") `
             -Args @{
                 AccessToken = $accessToken
+                Headers = $headers
                 ConfigPath = $ConfigFile
                 Config = $Config
             } `
@@ -214,6 +229,7 @@ while ($true) {
             -Names @("Get-LiveChatMessages", "Get-YouTubeLiveChatMessages", "Get-LiveChatComments", "Get-Comments") `
             -Args @{
                 AccessToken = $accessToken
+                Headers = $headers
                 LiveChatId = $liveChatId
                 ConfigPath = $ConfigFile
                 Config = $Config
@@ -235,13 +251,13 @@ while ($true) {
                 $messageId = [string]::Join("-", @($messageText.GetHashCode(), $now.ToString("yyyyMMddHHmmss")))
             } else {
                 $messageId = $comment.id
-                if ([string]::IsNullOrWhiteSpace("$messageId")) { $messageId = $comment.messageId }
-                if ([string]::IsNullOrWhiteSpace("$messageId")) { $messageId = $comment.snippet.id }
+                if ([string]::IsNullOrWhiteSpace("$messageId") -and $null -ne $comment.PSObject.Properties["messageId"]) { $messageId = $comment.messageId }
+                if ([string]::IsNullOrWhiteSpace("$messageId") -and $null -ne $comment.PSObject.Properties["snippet"]) { $messageId = $comment.snippet.id }
 
                 $messageText = $comment.text
-                if ([string]::IsNullOrWhiteSpace("$messageText")) { $messageText = $comment.message }
-                if ([string]::IsNullOrWhiteSpace("$messageText")) { $messageText = $comment.snippet.displayMessage }
-                if ([string]::IsNullOrWhiteSpace("$messageText")) { $messageText = $comment.snippet.textMessageDetails.messageText }
+                if ([string]::IsNullOrWhiteSpace("$messageText") -and $null -ne $comment.PSObject.Properties["message"]) { $messageText = $comment.message }
+                if ([string]::IsNullOrWhiteSpace("$messageText") -and $null -ne $comment.PSObject.Properties["snippet"]) { $messageText = $comment.snippet.displayMessage }
+                if ([string]::IsNullOrWhiteSpace("$messageText") -and $null -ne $comment.PSObject.Properties["snippet"]) { $messageText = $comment.snippet.textMessageDetails.messageText }
             }
 
             if ([string]::IsNullOrWhiteSpace("$messageText")) {
@@ -259,7 +275,7 @@ while ($true) {
             Write-Info "Comment: $messageText"
 
             $difyAnswer = Invoke-AiStreamFunction `
-                -Names @("Send-DifyMessage", "Invoke-Dify", "Send-Dify", "Ask-Dify", "Send-MessageToDify") `
+                -Names @("Send-DifyMessage", "Invoke-Dify", "Send-Dify", "Ask-Dify", "Send-MessageToDify", "Invoke-DifyChat") `
                 -Args @{
                     Query = $messageText
                     Text = $messageText
@@ -294,6 +310,7 @@ while ($true) {
                 -Names @("Post-LiveChatMessage", "Send-LiveChatMessage", "Post-YouTubeLiveChatMessage", "Send-YouTubeLiveChatMessage") `
                 -Args @{
                     AccessToken = $accessToken
+                    Headers = $headers
                     LiveChatId = $liveChatId
                     Message = $reply
                     Text = $reply
