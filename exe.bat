@@ -1,3 +1,5 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ai-script\main.ps1" %*
+setlocal
+cd /d "%~dp0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0main.ps1"
 pause
