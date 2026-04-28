@@ -1,9 +1,11 @@
 ﻿<# ==========================================
- YouTube Live ↔ Dify AI 自動応答Bot (main.ps1)
+ YouTube Live ↔ Dify AI 自動応答Bot with TTS (main.ps1)
  ------------------------------------------
  前提:
- - C:\ai-script\mod\ に mod01〜08.psm1 が配置済み
- - C:\ai-script\config\mykey.json に DifyApiKey, Google OAuthトークン類が保存済み
+ - C:\ai-script\mod\ に mod01〜10.psm1 が配置済み
+ - C:\ai-script\config\mykey.json に DifyApiKey, CartesiaApiKey, Google OAuthトークン類が保存済み
+ - TTS音声を Virtual Audio Cable に再生する場合は、Windowsの既定の再生デバイスを
+   "CABLE Input (VB-Audio Virtual Cable)" に設定してから起動してください。
  ========================================== #>
 
 # ====== 文字化け対策 ======
@@ -16,6 +18,8 @@ Import-Module "C:\ai-script\mod\mod05.psm1" -Force  # live配信検出
 Import-Module "C:\ai-script\mod\mod06.psm1" -Force  # コメント監視
 Import-Module "C:\ai-script\mod\mod07.psm1" -Force  # Dify送信
 Import-Module "C:\ai-script\mod\mod08.psm1" -Force  # チャット投稿
+Import-Module "C:\ai-script\mod\mod09.psm1" -Force  # Cartesia TTS
+Import-Module "C:\ai-script\mod\mod10.psm1" -Force  # 音声再生（Virtual Cable）
 
 # ====== アクセストークン確保 ======
 $AccessToken = $null; $Headers = $null
@@ -42,6 +46,21 @@ Write-Host ("💬 liveChatId={0}" -f $liveChatId) -ForegroundColor Yellow
 $DifyApiKey = Get-DifyApiKey
 if (-not $DifyApiKey) { throw "DifyApiKeyが見つかりません（mykey.jsonを確認）。" }
 Write-Host "🔑 DifyApiKey loaded." -ForegroundColor Yellow
+
+# ====== Cartesia APIキー読込 ======
+$CartesiaApiKey = $null
+try {
+    $CartesiaApiKey = Get-CartesiaApiKey
+    Write-Host "🔑 CartesiaApiKey loaded." -ForegroundColor Yellow
+} catch {
+    Write-Host "⚠ CartesiaApiKeyが見つかりません。TTS機能は無効になります。" -ForegroundColor Yellow
+}
+
+# ====== TTS音声保存先ディレクトリ ======
+$TtsOutputDir = "C:\ai-script\tts_output"
+if (-not (Test-Path $TtsOutputDir)) {
+    New-Item -ItemType Directory -Path $TtsOutputDir -Force | Out-Null
+}
 
 # ====== コメント監視開始 ======
 Write-Host "🚀 コメント監視ループを開始します..." -ForegroundColor Cyan
@@ -93,6 +112,16 @@ while ($true) {
         # ---- YouTubeへ投稿 ----
         Post-LiveChatMessage -Headers $Headers -LiveChatId $liveChatId -Message $answer
         $lastReplyAt = Get-Date
+
+        # ---- Cartesia TTS → Virtual Audio Cable 再生 ----
+        if ($CartesiaApiKey) {
+            $timestamp = (Get-Date -Format 'yyyyMMdd_HHmmss')
+            $wavPath = Join-Path $TtsOutputDir "tts_$timestamp.wav"
+            $wavFile = Invoke-CartesiaTTS -ApiKey $CartesiaApiKey -Text $answer -OutputPath $wavPath
+            if ($wavFile) {
+                Invoke-WavPlayback -WavPath $wavFile
+            }
+        }
     }
 
     $next = $resp.nextPageToken
