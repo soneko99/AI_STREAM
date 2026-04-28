@@ -123,8 +123,8 @@ function Invoke-WavPlayback {
     }
   }
 
-  # .NET MediaPlayer を使ってデバイス名のあるものに再生（レジストリでデフォルトデバイス変更が必要な場合の代替）
-  # Virtual Cable 使用時は Windows 設定でデフォルト出力デバイスを CABLE Input に変更してから呼び出すこと
+  # PlaySound (winmm.dll) を使ってWAVを同期/非同期再生する。
+  # Virtual Cable 使用時は Windows 設定でデフォルト出力デバイスを CABLE Input に変更してから呼び出すこと。
   Initialize-WinMm
   $flags = if ($Async) { [WinMmAudio]::SND_FILENAME -bor [WinMmAudio]::SND_ASYNC } `
            else        { [WinMmAudio]::SND_FILENAME -bor [WinMmAudio]::SND_SYNC }
